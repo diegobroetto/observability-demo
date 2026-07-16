@@ -27,7 +27,7 @@ Parameters:
     Description: Taxa de sampling do X-Ray (0.0 a 1.0). 0.05 = 5%
 
 # ---------------------------------------------------------------------------
-# Mapeamento por ambiente — log level e sampling diferenciados
+# Mapeamento por ambiente - log level e sampling diferenciados
 # ---------------------------------------------------------------------------
 Mappings:
   EnvConfig:
@@ -41,7 +41,7 @@ Mappings:
       TracingMode: Active
     prod:
       LogLevel: INFO
-      SamplingRate: 0.05       # 5% em prod — suficiente para diagnóstico
+      SamplingRate: 0.05       # 5% em prod - suficiente para diagnóstico
       TracingMode: Active
 
 # ---------------------------------------------------------------------------
@@ -68,7 +68,7 @@ Globals:
         POWERTOOLS_LOG_LEVEL:   !FindInMap [EnvConfig, !Ref Environment, LogLevel]
         TABLE_NAME:             !Ref PedidosTable
         EVENT_BUS_NAME:         !Ref PedidosEventBus
-        # Desliga log do evento completo em prod — evita dados sensíveis e custo
+        # Desliga log do evento completo em prod - evita dados sensíveis e custo
         LOG_EVENT:              !If [IsDev, "true", "false"]
 
 # ---------------------------------------------------------------------------
@@ -84,7 +84,7 @@ Conditions:
 Resources:
 
   # =========================================================================
-  # LAYER — AWS Lambda Powertools (logs, métricas, traces sem boilerplate)
+  # LAYER - AWS Lambda Powertools (logs, métricas, traces sem boilerplate)
   # =========================================================================
   PowertoolsLayer:
     Type: AWS::Serverless::LayerVersion
@@ -227,7 +227,7 @@ Resources:
       Name: !Sub "pedidos-bus-${Environment}"
 
   # =========================================================================
-  # LOG GROUPS — retenção explícita em todos
+  # LOG GROUPS - retenção explícita em todos
   # =========================================================================
 
   ApiLogGroup:
@@ -265,7 +265,7 @@ Resources:
       RetentionInDays: !Ref LogRetentionDays
 
   # =========================================================================
-  # ALARMES — o mínimo que você precisa em produção
+  # ALARMES - o mínimo que você precisa em produção
   # =========================================================================
 
   # Alarme de erro por função
@@ -286,7 +286,7 @@ Resources:
       ComparisonOperator: GreaterThanOrEqualToThreshold
       TreatMissingData: notBreaching
 
-  # Alarme de latência — p99, não média
+  # Alarme de latência - p99, não média
   CriarPedidoDurationAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
@@ -323,7 +323,7 @@ Resources:
       TreatMissingData: notBreaching
 
   # =========================================================================
-  # DASHBOARD — visão consolidada da stack
+  # DASHBOARD - visão consolidada da stack
   # =========================================================================
   PedidosDashboard:
     Type: AWS::CloudWatch::Dashboard
@@ -419,7 +419,7 @@ Resources:
             {
               "type": "metric",
               "properties": {
-                "title": "Decisões Manuais — Aprovar/Rejeitar (EMF)",
+                "title": "Decisões Manuais - Aprovar/Rejeitar (EMF)",
                 "region": "${AWS::Region}",
                 "metrics": [
                   ["observability-demo/Pedidos", "PedidoDecididoManualmente", "Decisao", "aprovado", "service", "observability-demo", {"stat": "Sum", "period": 300, "color": "#2ca02c"}],

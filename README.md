@@ -42,7 +42,7 @@ pelo valor do pedido:
 | > R$ 5.000,00 | `rejeitado` (automático) |
 
 Pedidos em `aguardando_aprovacao` só saem desse estado via `/aprovar` ou `/rejeitar`.
-A transição é protegida por `ConditionExpression` no DynamoDB — chamadas concorrentes
+A transição é protegida por `ConditionExpression` no DynamoDB - chamadas concorrentes
 ou fora de ordem retornam `409 Conflict` em vez de corromper o estado.
 
 ```bash
@@ -59,7 +59,7 @@ curl -X PATCH https://SEU-ID.execute-api.SUA-REGIAO.amazonaws.com/dev/pedidos/PE
 
 ```
 observability-demo/
-├── template.yaml                    # SAM — toda a infra
+├── template.yaml                    # SAM - toda a infra
 ├── samconfig.toml                   # Deploy por ambiente
 ├── layers/
 │   └── powertools/
@@ -103,7 +103,7 @@ observability-demo/
 ## Deploy
 
 ```bash
-# Build — compila para Amazon Linux 2023 / arm64
+# Build - compila para Amazon Linux 2023 / arm64
 sam build --use-container
 
 # Primeiro deploy (configura S3 bucket, pergunta região etc.)
@@ -120,12 +120,12 @@ sam deploy --config-env prod
 ## Teste local
 
 ```bash
-# POST /pedidos — pedido válido (aprovação automática)
+# POST /pedidos - pedido válido (aprovação automática)
 sam local invoke CriarPedidoFunction \
   --event events/criar_pedido_valido.json \
   --env-vars env.json
 
-# POST /pedidos — pedido de alto valor (aprovação manual)
+# POST /pedidos - pedido de alto valor (aprovação manual)
 sam local invoke CriarPedidoFunction \
   --event events/criar_pedido_alto_valor.json
 
@@ -159,7 +159,7 @@ sam local invoke ProcessarPedidoFunction \
 
 ### Dashboard
 ```
-# URL gerada pelo stack — disponível nos Outputs do CloudFormation
+# URL gerada pelo stack - disponível nos Outputs do CloudFormation
 aws cloudformation describe-stacks \
   --stack-name observability-demo-dev \
   --query "Stacks[0].Outputs[?OutputKey=='DashboardUrl'].OutputValue" \
@@ -190,4 +190,4 @@ sam delete --stack-name observability-demo-dev
 
 ## Artigo completo
 
-[Dev.to — Série Serverless na Prática](https://dev.to/diegobroetto)
+[Dev.to - Série Serverless na Prática](https://dev.to/diegobroetto)

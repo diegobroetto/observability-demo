@@ -1,10 +1,10 @@
 """
-decidir_pedido/handler.py — PATCH /pedidos/{pedido_id}/aprovar e /rejeitar
+decidir_pedido/handler.py - PATCH /pedidos/{pedido_id}/aprovar e /rejeitar
 
 Demonstra:
   - Duas rotas de API mapeadas para o mesmo Lambda (menos cold start/custo
     do que duas funções quase idênticas)
-  - Transição de estado protegida por ConditionExpression — evita corrida
+  - Transição de estado protegida por ConditionExpression - evita corrida
     entre duas decisões concorrentes e detecta pedido inexistente
   - Métrica com dimensão de negócio para decisões manuais
   - 409 Conflict quando o pedido não está no estado esperado

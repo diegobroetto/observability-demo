@@ -1,5 +1,5 @@
 """
-criar_pedido/handler.py — POST /pedidos
+criar_pedido/handler.py - POST /pedidos
 
 Demonstra:
   - Logger com inject_lambda_context (cold_start, correlation ID)
@@ -75,7 +75,7 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Funções internas — cada uma com seu subsegmento no X-Ray
+# Funções internas - cada uma com seu subsegmento no X-Ray
 # ---------------------------------------------------------------------------
 
 @tracer.capture_method
@@ -116,7 +116,7 @@ def _montar_pedido(body: dict) -> dict:
 @tracer.capture_method
 def _salvar_pedido(pedido: dict) -> None:
     """Persiste o pedido no DynamoDB."""
-    # DynamoDB não aceita float nativo — precisa de Decimal.
+    # DynamoDB não aceita float nativo - precisa de Decimal.
     # Convertido aqui (via str) só para o item persistido; o dict `pedido`
     # continua com float para logging/métricas/resposta HTTP.
     item = {**pedido, "valor": Decimal(str(pedido["valor"]))}

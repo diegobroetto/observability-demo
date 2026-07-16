@@ -1,5 +1,5 @@
 """
-observability.py — utilitários compartilhados de observabilidade
+observability.py - utilitários compartilhados de observabilidade
 
 Em um projeto real, este módulo ficaria em um layer próprio de utilitários
 ou em um pacote interno. Aqui está duplicado por simplicidade de exemplo.
@@ -17,7 +17,7 @@ SERVICE_NAME = os.environ.get("POWERTOOLS_SERVICE_NAME", "observability-demo")
 NAMESPACE    = "observability-demo/Pedidos"
 
 # ---------------------------------------------------------------------------
-# Logger — structured JSON com correlation ID automático
+# Logger - structured JSON com correlation ID automático
 #
 # O Powertools adiciona automaticamente:
 #   - cold_start (bool)
@@ -33,7 +33,7 @@ logger = Logger(
 )
 
 # ---------------------------------------------------------------------------
-# Tracer — X-Ray sem boilerplate
+# Tracer - X-Ray sem boilerplate
 #
 # capture_response=False em prod: evita adicionar o response completo
 # ao trace, que pode conter dados sensíveis e aumentar custo de X-Ray.
@@ -41,11 +41,11 @@ logger = Logger(
 tracer = Tracer(service=SERVICE_NAME)
 
 # ---------------------------------------------------------------------------
-# Metrics — Embedded Metric Format (EMF)
+# Metrics - Embedded Metric Format (EMF)
 #
 # EMF emite métricas customizadas dentro do log JSON.
 # O CloudWatch processa o log e cria a métrica automaticamente.
-# Sem chamada de API extra por invocação — mais eficiente que put_metric_data.
+# Sem chamada de API extra por invocação - mais eficiente que put_metric_data.
 # ---------------------------------------------------------------------------
 metrics = Metrics(namespace=NAMESPACE, service=SERVICE_NAME)
 

@@ -1,2 +1,2 @@
-# AWS Lambda Powertools — logs, métricas e traces sem boilerplate
+# AWS Lambda Powertools - logs, métricas e traces sem boilerplate
 aws-lambda-powertools[all]==3.10.0

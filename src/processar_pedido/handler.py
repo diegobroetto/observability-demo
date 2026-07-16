@@ -1,5 +1,5 @@
 """
-processar_pedido/handler.py — consumidor EventBridge (assíncrono)
+processar_pedido/handler.py - consumidor EventBridge (assíncrono)
 
 Demonstra:
   - Métricas com dimensões de negócio (Status do pedido)
@@ -34,7 +34,7 @@ LIMITE_APROVACAO_AUTOMATICA = Decimal("500.00")
 def lambda_handler(event: dict, context: LambdaContext) -> None:
     inicio = time.perf_counter()
 
-    # O evento vem do EventBridge — extrai o detail
+    # O evento vem do EventBridge - extrai o detail
     detail = event.get("detail", {})
     pedido_id  = detail.get("pedido_id")
     valor      = Decimal(str(detail.get("valor", 0)))
@@ -49,11 +49,11 @@ def lambda_handler(event: dict, context: LambdaContext) -> None:
 
         duracao_ms = (time.perf_counter() - inicio) * 1000
 
-        # Métrica com dimensão de negócio — cardinalidade baixa (aprovado/rejeitado/manual)
+        # Métrica com dimensão de negócio - cardinalidade baixa (aprovado/rejeitado/manual)
         metrics.add_metric(name="PedidoProcessado", unit=MetricUnit.Count, value=1)
         metrics.add_dimension(name="Status", value=status)
 
-        # Duração do processamento — útil para detectar degradação
+        # Duração do processamento - útil para detectar degradação
         metrics.add_metric(name="DuracaoProcessamento", unit=MetricUnit.Milliseconds, value=duracao_ms)
 
         logger.info(
@@ -87,7 +87,7 @@ def _atualizar_status(pedido_id: str, status: str) -> None:
         table.update_item(
             Key={"pedido_id": pedido_id},
             UpdateExpression="SET #s = :status, atualizado_em = :agora",
-            # Só atualiza se o pedido ainda está pendente — idempotência
+            # Só atualiza se o pedido ainda está pendente - idempotência
             ConditionExpression="#s = :pendente",
             ExpressionAttributeNames={"#s": "status"},
             ExpressionAttributeValues={
@@ -100,9 +100,9 @@ def _atualizar_status(pedido_id: str, status: str) -> None:
 
     except ClientError as e:
         if e.response["Error"]["Code"] == "ConditionalCheckFailedException":
-            # Pedido já foi processado — idempotência garantida
+            # Pedido já foi processado - idempotência garantida
             logger.warning(
-                "Pedido já processado anteriormente — ignorando",
+                "Pedido já processado anteriormente - ignorando",
                 pedido_id=pedido_id,
             )
             return

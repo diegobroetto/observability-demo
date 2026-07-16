@@ -1,4 +1,4 @@
-# CloudWatch Logs Insights — Queries prontas
+# CloudWatch Logs Insights - Queries prontas
 
 Cole estas queries no console em: CloudWatch → Logs Insights
 Selecione o log group da função desejada e ajuste o intervalo de tempo.
@@ -15,7 +15,7 @@ filter level = "ERROR"
 
 ---
 
-## 2. Cold starts — frequência e funções mais afetadas
+## 2. Cold starts - frequência e funções mais afetadas
 
 ```
 filter cold_start = true
@@ -25,7 +25,7 @@ filter cold_start = true
 
 ---
 
-## 3. Pedidos com maior latência (p99) — últimas 3 horas
+## 3. Pedidos com maior latência (p99) - últimas 3 horas
 
 ```
 filter ispresent(pedido_id)
@@ -40,7 +40,7 @@ filter ispresent(pedido_id)
 
 ---
 
-## 4. Erros agrupados por tipo — para priorizar o que corrigir
+## 4. Erros agrupados por tipo - para priorizar o que corrigir
 
 ```
 filter level = "ERROR"
@@ -51,7 +51,7 @@ filter level = "ERROR"
 
 ---
 
-## 5. Rastrear um pedido específico — toda a jornada
+## 5. Rastrear um pedido específico - toda a jornada
 
 ```
 # Substitua o valor de pedido_id pelo ID real
@@ -72,7 +72,7 @@ stats sum(@ingestionTime) as bytes_ingeridos by @logStream
 
 ---
 
-## 7. Invocações sem cold start vs com cold start — proporção
+## 7. Invocações sem cold start vs com cold start - proporção
 
 ```
 stats
@@ -100,7 +100,7 @@ filter mensagem = "Pedido processado"
 
 Queries no Logs Insights cobram por GB escaneado ($0.005/GB).
 Para reduzir custo:
-- Use filtros antes de stats — o `filter` reduz o volume processado
+- Use filtros antes de stats - o `filter` reduz o volume processado
 - Selecione o menor intervalo de tempo que responde sua pergunta
 - Use log groups específicos, não o curinga /* quando possível
 - Considere criar métricas via EMF para perguntas que você faz frequentemente

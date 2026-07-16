@@ -1,5 +1,5 @@
 """
-consultar_pedido/handler.py — GET /pedidos/{pedido_id}
+consultar_pedido/handler.py - GET /pedidos/{pedido_id}
 
 Demonstra:
   - Cache hit/miss como métrica customizada via EMF
@@ -31,7 +31,7 @@ def lambda_handler(event: dict, context: LambdaContext) -> dict:
         if not pedido_id:
             return _resposta(400, {"erro": "pedido_id é obrigatório"})
 
-        # Adiciona pedido_id ao contexto de log — aparece em todos os logs desta invocação
+        # Adiciona pedido_id ao contexto de log - aparece em todos os logs desta invocação
         logger.append_keys(pedido_id=pedido_id)
 
         pedido = _buscar_pedido(pedido_id)
@@ -58,7 +58,7 @@ def _buscar_pedido(pedido_id: str) -> dict | None:
         resposta = table.get_item(Key={"pedido_id": pedido_id})
         item = resposta.get("Item")
 
-        # Anota no trace se foi um hit ou miss — visível no X-Ray
+        # Anota no trace se foi um hit ou miss - visível no X-Ray
         tracer.put_annotation(key="cache_hit", value=item is not None)
 
         return item
