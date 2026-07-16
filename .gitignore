@@ -1,0 +1,32 @@
+# SAM build artifacts
+.aws-sam/
+samconfig.toml.bak
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+.Python
+
+# Distribution / packaging
+build/
+dist/
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE / OS
+.vscode/
+.idea/
+*.swp
+.DS_Store
+
+# Logs e temporários
+*.log
+.env
+.env.*

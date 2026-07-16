@@ -1,0 +1,449 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Transform: AWS::Serverless-2016-10-31
+
+Description: >
+  observability-demo
+  Exemplo completo de observabilidade serverless com CloudWatch + X-Ray.
+  Artigo: "Observabilidade serverless sem surpresa no bolso"
+
+# ---------------------------------------------------------------------------
+# Parâmetros
+# ---------------------------------------------------------------------------
+Parameters:
+  Environment:
+    Type: String
+    Default: dev
+    AllowedValues: [dev, staging, prod]
+
+  LogRetentionDays:
+    Type: Number
+    Default: 30
+    AllowedValues: [7, 14, 30, 60, 90, 180, 365]
+    Description: Retenção dos logs em dias
+
+  XRaySamplingRate:
+    Type: Number
+    Default: 0.05
+    Description: Taxa de sampling do X-Ray (0.0 a 1.0). 0.05 = 5%
+
+# ---------------------------------------------------------------------------
+# Mapeamento por ambiente — log level e sampling diferenciados
+# ---------------------------------------------------------------------------
+Mappings:
+  EnvConfig:
+    dev:
+      LogLevel: DEBUG
+      SamplingRate: 1.0        # 100% em dev para facilitar debug
+      TracingMode: Active
+    staging:
+      LogLevel: INFO
+      SamplingRate: 0.2
+      TracingMode: Active
+    prod:
+      LogLevel: INFO
+      SamplingRate: 0.05       # 5% em prod — suficiente para diagnóstico
+      TracingMode: Active
+
+# ---------------------------------------------------------------------------
+# Globals
+# ---------------------------------------------------------------------------
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures: [arm64]
+    MemorySize: 512
+    Timeout: 30
+    Tracing: Active
+    # Structured logging nativo do Lambda (sem precisar de lib extra)
+    LoggingConfig:
+      LogFormat: JSON
+      ApplicationLogLevel: !FindInMap [EnvConfig, !Ref Environment, LogLevel]
+      SystemLogLevel: WARN
+    Layers:
+      - !Ref PowertoolsLayer
+    Environment:
+      Variables:
+        ENVIRONMENT:            !Ref Environment
+        POWERTOOLS_SERVICE_NAME: observability-demo
+        POWERTOOLS_LOG_LEVEL:   !FindInMap [EnvConfig, !Ref Environment, LogLevel]
+        TABLE_NAME:             !Ref PedidosTable
+        EVENT_BUS_NAME:         !Ref PedidosEventBus
+        # Desliga log do evento completo em prod — evita dados sensíveis e custo
+        LOG_EVENT:              !If [IsDev, "true", "false"]
+
+# ---------------------------------------------------------------------------
+# Condições
+# ---------------------------------------------------------------------------
+Conditions:
+  IsDev:     !Equals [!Ref Environment, dev]
+  IsProd:    !Equals [!Ref Environment, prod]
+
+# ---------------------------------------------------------------------------
+# Recursos
+# ---------------------------------------------------------------------------
+Resources:
+
+  # =========================================================================
+  # LAYER — AWS Lambda Powertools (logs, métricas, traces sem boilerplate)
+  # =========================================================================
+  PowertoolsLayer:
+    Type: AWS::Serverless::LayerVersion
+    Properties:
+      LayerName: !Sub "powertools-py313-arm64-${Environment}"
+      Description: "AWS Lambda Powertools for Python 3.13 / arm64"
+      ContentUri: layers/powertools/
+      CompatibleRuntimes: [python3.13]
+      CompatibleArchitectures: [arm64]
+      RetentionPolicy: Retain
+    Metadata:
+      BuildMethod: python3.13
+      BuildArchitecture: arm64
+
+  # =========================================================================
+  # API GATEWAY
+  # =========================================================================
+  PedidosApi:
+    Type: AWS::Serverless::Api
+    Properties:
+      Name: !Sub "pedidos-api-${Environment}"
+      StageName: !Ref Environment
+      TracingEnabled: true     # X-Ray no API Gateway também
+      AccessLogSetting:
+        DestinationArn: !GetAtt ApiLogGroup.Arn
+        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","method":"$context.httpMethod","path":"$context.path","status":"$context.status","latency":"$context.responseLatency","integrationLatency":"$context.integrationLatency"}'
+
+  # =========================================================================
+  # FUNÇÕES LAMBDA
+  # =========================================================================
+
+  # --- POST /pedidos ---
+  CriarPedidoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "pedidos-criar-${Environment}"
+      Description: "Cria um novo pedido e publica evento no EventBridge"
+      Handler: handler.lambda_handler
+      CodeUri: src/criar_pedido/
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PedidosApi
+            Path: /pedidos
+            Method: POST
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref PedidosTable
+        - EventBridgePutEventsPolicy:
+            EventBusName: !Ref PedidosEventBus
+
+  # --- GET /pedidos/{id} ---
+  ConsultarPedidoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "pedidos-consultar-${Environment}"
+      Description: "Consulta um pedido por ID"
+      Handler: handler.lambda_handler
+      CodeUri: src/consultar_pedido/
+      Events:
+        Api:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PedidosApi
+            Path: /pedidos/{pedido_id}
+            Method: GET
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PedidosTable
+
+  # --- PATCH /pedidos/{id}/aprovar e /pedidos/{id}/rejeitar ---
+  DecidirPedidoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "pedidos-decidir-${Environment}"
+      Description: "Aprova ou rejeita manualmente um pedido em aguardando_aprovacao"
+      Handler: handler.lambda_handler
+      CodeUri: src/decidir_pedido/
+      Events:
+        Aprovar:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PedidosApi
+            Path: /pedidos/{pedido_id}/aprovar
+            Method: PATCH
+        Rejeitar:
+          Type: Api
+          Properties:
+            RestApiId: !Ref PedidosApi
+            Path: /pedidos/{pedido_id}/rejeitar
+            Method: PATCH
+      Policies:
+        - DynamoDBReadPolicy:
+            TableName: !Ref PedidosTable
+        - DynamoDBWritePolicy:
+            TableName: !Ref PedidosTable
+
+  # --- Processamento assíncrono via EventBridge ---
+  ProcessarPedidoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "pedidos-processar-${Environment}"
+      Description: "Processa pedido de forma assíncrona como consumidor do EventBridge"
+      Handler: handler.lambda_handler
+      CodeUri: src/processar_pedido/
+      Events:
+        PedidoCriado:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref PedidosEventBus
+            Pattern:
+              source: [observability-demo.pedidos]
+              detail-type: [PedidoCriado]
+      Policies:
+        - DynamoDBWritePolicy:
+            TableName: !Ref PedidosTable
+
+  # =========================================================================
+  # INFRAESTRUTURA DE DADOS
+  # =========================================================================
+
+  PedidosTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      TableName: !Sub "pedidos-${Environment}"
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pedido_id
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pedido_id
+          KeyType: HASH
+      PointInTimeRecoverySpecification:
+        PointInTimeRecoveryEnabled: !If [IsProd, true, false]
+
+  PedidosEventBus:
+    Type: AWS::Events::EventBus
+    Properties:
+      Name: !Sub "pedidos-bus-${Environment}"
+
+  # =========================================================================
+  # LOG GROUPS — retenção explícita em todos
+  # =========================================================================
+
+  ApiLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub "/aws/apigateway/pedidos-api-${Environment}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  CriarPedidoLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/pedidos-criar-${Environment}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  ConsultarPedidoLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/pedidos-consultar-${Environment}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  DecidirPedidoLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/pedidos-decidir-${Environment}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  ProcessarPedidoLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties:
+      LogGroupName: !Sub "/aws/lambda/pedidos-processar-${Environment}"
+      RetentionInDays: !Ref LogRetentionDays
+
+  # =========================================================================
+  # ALARMES — o mínimo que você precisa em produção
+  # =========================================================================
+
+  # Alarme de erro por função
+  CriarPedidoErrorAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "pedidos-criar-errors-${Environment}"
+      AlarmDescription: "Taxa de erro > 1% nos últimos 5 minutos"
+      Namespace: AWS/Lambda
+      MetricName: Errors
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref CriarPedidoFunction
+      Statistic: Sum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 1
+      ComparisonOperator: GreaterThanOrEqualToThreshold
+      TreatMissingData: notBreaching
+
+  # Alarme de latência — p99, não média
+  CriarPedidoDurationAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "pedidos-criar-duration-p99-${Environment}"
+      AlarmDescription: "p99 de duração > 80% do timeout (24s de 30s)"
+      Namespace: AWS/Lambda
+      MetricName: Duration
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref CriarPedidoFunction
+      ExtendedStatistic: p99
+      Period: 300
+      EvaluationPeriods: 2
+      Threshold: 24000           # 80% de 30s = 24s em ms
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  # Alarme de throttle
+  ThrottleAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "pedidos-throttles-${Environment}"
+      AlarmDescription: "Qualquer throttle em produção merece atenção"
+      Namespace: AWS/Lambda
+      MetricName: Throttles
+      Dimensions:
+        - Name: FunctionName
+          Value: !Ref CriarPedidoFunction
+      Statistic: Sum
+      Period: 60
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
+  # =========================================================================
+  # DASHBOARD — visão consolidada da stack
+  # =========================================================================
+  PedidosDashboard:
+    Type: AWS::CloudWatch::Dashboard
+    Properties:
+      DashboardName: !Sub "pedidos-observabilidade-${Environment}"
+      DashboardBody: !Sub |
+        {
+          "widgets": [
+            {
+              "type": "metric",
+              "properties": {
+                "title": "Taxa de Erro por Função",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/Lambda", "Errors", "FunctionName", "pedidos-criar-${Environment}", {"stat": "Sum", "period": 300, "color": "#d62728", "label": "Criar"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "pedidos-consultar-${Environment}", {"stat": "Sum", "period": 300, "color": "#ff7f0e", "label": "Consultar"}],
+                  ["AWS/Lambda", "Errors", "FunctionName", "pedidos-processar-${Environment}", {"stat": "Sum", "period": 300, "color": "#9467bd", "label": "Processar"}]
+                ],
+                "view": "timeSeries",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "title": "Latência p99 por Função (ms)",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/Lambda", "Duration", "FunctionName", "pedidos-criar-${Environment}", {"stat": "p99", "period": 300, "label": "Criar p99"}],
+                  ["AWS/Lambda", "Duration", "FunctionName", "pedidos-consultar-${Environment}", {"stat": "p99", "period": 300, "label": "Consultar p99"}],
+                  ["AWS/Lambda", "Duration", "FunctionName", "pedidos-processar-${Environment}", {"stat": "p99", "period": 300, "label": "Processar p99"}]
+                ],
+                "view": "timeSeries",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "title": "Invocações Totais",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/Lambda", "Invocations", "FunctionName", "pedidos-criar-${Environment}", {"stat": "Sum", "period": 300}],
+                  ["AWS/Lambda", "Invocations", "FunctionName", "pedidos-consultar-${Environment}", {"stat": "Sum", "period": 300}],
+                  ["AWS/Lambda", "Invocations", "FunctionName", "pedidos-processar-${Environment}", {"stat": "Sum", "period": 300}]
+                ],
+                "view": "timeSeries",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "title": "Throttles",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["AWS/Lambda", "Throttles", "FunctionName", "pedidos-criar-${Environment}", {"stat": "Sum", "period": 60}],
+                  ["AWS/Lambda", "Throttles", "FunctionName", "pedidos-consultar-${Environment}", {"stat": "Sum", "period": 60}]
+                ],
+                "view": "timeSeries",
+                "period": 60
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "title": "Cold Starts (métrica customizada via EMF)",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["observability-demo/Pedidos", "ColdStart", "service", "observability-demo", "function_name", "pedidos-criar-${Environment}", {"stat": "Sum", "period": 300, "label": "Criar"}],
+                  ["observability-demo/Pedidos", "ColdStart", "service", "observability-demo", "function_name", "pedidos-consultar-${Environment}", {"stat": "Sum", "period": 300, "label": "Consultar"}],
+                  ["observability-demo/Pedidos", "ColdStart", "service", "observability-demo", "function_name", "pedidos-processar-${Environment}", {"stat": "Sum", "period": 300, "label": "Processar"}],
+                  ["observability-demo/Pedidos", "ColdStart", "service", "observability-demo", "function_name", "pedidos-decidir-${Environment}", {"stat": "Sum", "period": 300, "label": "Decidir"}]
+                ],
+                "view": "timeSeries",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "title": "Pedidos Processados por Status (EMF)",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["observability-demo/Pedidos", "PedidoProcessado", "Status", "aprovado", "service", "observability-demo", {"stat": "Sum", "period": 300, "color": "#2ca02c"}],
+                  ["observability-demo/Pedidos", "PedidoProcessado", "Status", "aguardando_aprovacao", "service", "observability-demo", {"stat": "Sum", "period": 300, "color": "#ff7f0e"}],
+                  ["observability-demo/Pedidos", "PedidoProcessado", "Status", "rejeitado", "service", "observability-demo", {"stat": "Sum", "period": 300, "color": "#d62728"}]
+                ],
+                "view": "timeSeries",
+                "period": 300
+              }
+            },
+            {
+              "type": "metric",
+              "properties": {
+                "title": "Decisões Manuais — Aprovar/Rejeitar (EMF)",
+                "region": "${AWS::Region}",
+                "metrics": [
+                  ["observability-demo/Pedidos", "PedidoDecididoManualmente", "Decisao", "aprovado", "service", "observability-demo", {"stat": "Sum", "period": 300, "color": "#2ca02c"}],
+                  ["observability-demo/Pedidos", "PedidoDecididoManualmente", "Decisao", "rejeitado", "service", "observability-demo", {"stat": "Sum", "period": 300, "color": "#d62728"}]
+                ],
+                "view": "timeSeries",
+                "period": 300
+              }
+            }
+          ]
+        }
+
+# ---------------------------------------------------------------------------
+# Outputs
+# ---------------------------------------------------------------------------
+Outputs:
+  ApiUrl:
+    Description: "URL da API"
+    Value: !Sub "https://${PedidosApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
+
+  DashboardUrl:
+    Description: "URL do Dashboard CloudWatch"
+    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home#dashboards:name=pedidos-observabilidade-${Environment}"
+
+  PedidosTableName:
+    Description: "Nome da tabela DynamoDB"
+    Value: !Ref PedidosTable
