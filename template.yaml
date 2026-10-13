@@ -249,7 +249,8 @@ Resources:
             # legado simulado. Com lote de 5, o pior caso (75s) passaria do
             # timeout de 30s da função.
             BatchSize: 1
-            MaximumConcurrency: 5
+            ScalingConfig:
+              MaximumConcurrency: 5
             FunctionResponseTypes: [ReportBatchItemFailures]
       Policies:
         - DynamoDBWritePolicy: { TableName: !Ref PedidosTable }
@@ -310,7 +311,8 @@ Resources:
           Properties:
             Queue: !GetAtt NotificacaoQueue.Arn
             BatchSize: 10
-            MaximumConcurrency: 10
+            ScalingConfig:
+              MaximumConcurrency: 10
             # Esta flag é o que faz o retorno do BatchProcessor (Powertools)
             # ser respeitado pelo SQS. Sem ela, mesmo com o código certo no
             # handler, o comportamento continua sendo tudo-ou-nada.
@@ -372,7 +374,8 @@ Resources:
           Properties:
             Queue: !GetAtt FinanceiroQueue.Arn
             BatchSize: 10
-            MaximumConcurrency: 10
+            ScalingConfig:
+              MaximumConcurrency: 10
             FunctionResponseTypes: [ReportBatchItemFailures]
     Metadata:
       BuildMethod: python3.13

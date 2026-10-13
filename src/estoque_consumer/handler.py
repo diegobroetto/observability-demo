@@ -21,6 +21,7 @@ Isso é fácil de reproduzir: troque VisibilityTimeout para 10 no template,
 faça deploy, e observe `PedidoEstoqueDuplicado` subir no CloudWatch.
 """
 import json, os, time, random
+from decimal import Decimal
 import boto3
 from observability import logger, tracer, metrics, registrar_erro
 from aws_lambda_powertools.metrics import MetricUnit
@@ -53,7 +54,7 @@ def processar_registro(record: dict) -> None:
         table.update_item(
             Key={"pedido_id": f"estoque#{produto.get('id', 'desconhecido')}"},
             UpdateExpression="SET ultima_baixa = :agora, ultimo_pedido = :pedido_id",
-            ExpressionAttributeValues={":agora": time.time(), ":pedido_id": pedido_id},
+            ExpressionAttributeValues={":agora": Decimal(str(time.time())), ":pedido_id": pedido_id},
         )
 
     metrics.add_metric(name="EstoqueBaixado", unit=MetricUnit.Count, value=1)
