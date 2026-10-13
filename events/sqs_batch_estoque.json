@@ -1,0 +1,6 @@
+{
+  "Records": [
+    {"messageId": "1", "body": "{\"detail\": {\"pedido_id\": \"pedido-001\", \"produtos\": [{\"id\": \"prod-a\"}]}}"},
+    {"messageId": "2", "body": "{\"detail\": {\"pedido_id\": \"pedido-002\", \"produtos\": [{\"id\": \"prod-b\"}]}}"}
+  ]
+}

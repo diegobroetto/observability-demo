@@ -1,1 +1,1 @@
-# Intencionalmente vazio - aws-lambda-powertools e boto3 vêm do layer e do runtime.
+# vazio — deps vêm do layer Powertools e do runtime (boto3)

@@ -2,6 +2,7 @@ version = 0.1
 
 [dev.deploy.parameters]
 stack_name          = "observability-demo-dev"
+resolve_s3          = true
 s3_prefix           = "observability-demo"
 region              = "us-east-1"
 confirm_changeset   = false
@@ -10,6 +11,7 @@ parameter_overrides = "Environment=dev LogRetentionDays=7"
 
 [staging.deploy.parameters]
 stack_name          = "observability-demo-staging"
+resolve_s3          = true
 s3_prefix           = "observability-demo"
 region              = "us-east-1"
 confirm_changeset   = true
@@ -18,20 +20,9 @@ parameter_overrides = "Environment=staging LogRetentionDays=30"
 
 [prod.deploy.parameters]
 stack_name          = "observability-demo-prod"
+resolve_s3          = true
 s3_prefix           = "observability-demo"
 region              = "us-east-1"
 confirm_changeset   = true
 capabilities        = "CAPABILITY_IAM"
-parameter_overrides = "Environment=prod LogRetentionDays=90 XRaySamplingRate=0.05"
-
-[default.deploy.parameters]
-stack_name = "observability-demo"
-resolve_s3 = true
-s3_prefix = "observability-demo"
-confirm_changeset = true
-capabilities = "CAPABILITY_IAM"
-parameter_overrides = "Environment=\"dev\" LogRetentionDays=\"30\" XRaySamplingRate=\"0.05\""
-image_repositories = []
-
-[default.global.parameters]
-region = "us-east-1"
+parameter_overrides = "Environment=prod LogRetentionDays=90"

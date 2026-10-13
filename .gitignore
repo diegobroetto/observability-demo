@@ -30,3 +30,6 @@ htmlcov/
 *.log
 .env
 .env.*
+
+# Scripts de cenário (artigo 02)
+scripts/backup-original/

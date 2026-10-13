@@ -2,51 +2,36 @@ AWSTemplateFormatVersion: "2010-09-09"
 Transform: AWS::Serverless-2016-10-31
 
 Description: >
-  observability-demo
-  Exemplo completo de observabilidade serverless com CloudWatch + X-Ray.
-  Artigo: "Observabilidade serverless sem surpresa no bolso"
+  observability-demo — Event-driven com EventBridge + SQS
+  Extensão do projeto de observabilidade: um evento PedidoCriado é
+  roteado (fan-out) para 3 filas SQS independentes e para uma Lambda
+  como alvo direto, demonstrando quando cada peça entra.
+  Artigo: "Event-driven com EventBridge + SQS: quando cada um entra
+  e como evitar os erros mais comuns"
 
-# ---------------------------------------------------------------------------
-# Parâmetros
-# ---------------------------------------------------------------------------
 Parameters:
   Environment:
     Type: String
     Default: dev
     AllowedValues: [dev, staging, prod]
-
   LogRetentionDays:
     Type: Number
     Default: 30
     AllowedValues: [7, 14, 30, 60, 90, 180, 365]
-    Description: Retenção dos logs em dias
 
-  XRaySamplingRate:
-    Type: Number
-    Default: 0.05
-    Description: Taxa de sampling do X-Ray (0.0 a 1.0). 0.05 = 5%
-
-# ---------------------------------------------------------------------------
-# Mapeamento por ambiente - log level e sampling diferenciados
-# ---------------------------------------------------------------------------
 Mappings:
   EnvConfig:
     dev:
       LogLevel: DEBUG
-      SamplingRate: 1.0        # 100% em dev para facilitar debug
-      TracingMode: Active
     staging:
       LogLevel: INFO
-      SamplingRate: 0.2
-      TracingMode: Active
     prod:
       LogLevel: INFO
-      SamplingRate: 0.05       # 5% em prod - suficiente para diagnóstico
-      TracingMode: Active
 
-# ---------------------------------------------------------------------------
-# Globals
-# ---------------------------------------------------------------------------
+Conditions:
+  IsDev:  !Equals [!Ref Environment, dev]
+  IsProd: !Equals [!Ref Environment, prod]
+
 Globals:
   Function:
     Runtime: python3.13
@@ -54,7 +39,6 @@ Globals:
     MemorySize: 512
     Timeout: 30
     Tracing: Active
-    # Structured logging nativo do Lambda (sem precisar de lib extra)
     LoggingConfig:
       LogFormat: JSON
       ApplicationLogLevel: !FindInMap [EnvConfig, !Ref Environment, LogLevel]
@@ -63,161 +47,368 @@ Globals:
       - !Ref PowertoolsLayer
     Environment:
       Variables:
-        ENVIRONMENT:            !Ref Environment
-        POWERTOOLS_SERVICE_NAME: observability-demo
-        POWERTOOLS_LOG_LEVEL:   !FindInMap [EnvConfig, !Ref Environment, LogLevel]
-        TABLE_NAME:             !Ref PedidosTable
-        EVENT_BUS_NAME:         !Ref PedidosEventBus
-        # Desliga log do evento completo em prod - evita dados sensíveis e custo
-        LOG_EVENT:              !If [IsDev, "true", "false"]
+        ENVIRONMENT:              !Ref Environment
+        POWERTOOLS_SERVICE_NAME:  observability-demo
+        POWERTOOLS_LOG_LEVEL:     !FindInMap [EnvConfig, !Ref Environment, LogLevel]
+        TABLE_NAME:               !Ref PedidosTable
+        EVENT_BUS_NAME:           !Ref PedidosEventBus
+        LOG_EVENT:                !If [IsDev, "true", "false"]
 
-# ---------------------------------------------------------------------------
-# Condições
-# ---------------------------------------------------------------------------
-Conditions:
-  IsDev:     !Equals [!Ref Environment, dev]
-  IsProd:    !Equals [!Ref Environment, prod]
-
-# ---------------------------------------------------------------------------
-# Recursos
-# ---------------------------------------------------------------------------
 Resources:
 
   # =========================================================================
-  # LAYER - AWS Lambda Powertools (logs, métricas, traces sem boilerplate)
+  # LAYER
   # =========================================================================
   PowertoolsLayer:
     Type: AWS::Serverless::LayerVersion
     Properties:
       LayerName: !Sub "powertools-py313-arm64-${Environment}"
-      Description: "AWS Lambda Powertools for Python 3.13 / arm64"
       ContentUri: layers/powertools/
       CompatibleRuntimes: [python3.13]
       CompatibleArchitectures: [arm64]
       RetentionPolicy: Retain
     Metadata:
       BuildMethod: python3.13
-      BuildArchitecture: arm64
+      BuildArchitecture: arm64   # força build ARM mesmo em host x86 (ver artigo de Layers)
 
   # =========================================================================
-  # API GATEWAY
+  # API GATEWAY + FUNÇÕES SÍNCRONAS (do artigo anterior)
   # =========================================================================
   PedidosApi:
     Type: AWS::Serverless::Api
     Properties:
       Name: !Sub "pedidos-api-${Environment}"
       StageName: !Ref Environment
-      TracingEnabled: true     # X-Ray no API Gateway também
-      AccessLogSetting:
-        DestinationArn: !GetAtt ApiLogGroup.Arn
-        Format: '{"requestId":"$context.requestId","ip":"$context.identity.sourceIp","method":"$context.httpMethod","path":"$context.path","status":"$context.status","latency":"$context.responseLatency","integrationLatency":"$context.integrationLatency"}'
+      TracingEnabled: true
 
-  # =========================================================================
-  # FUNÇÕES LAMBDA
-  # =========================================================================
-
-  # --- POST /pedidos ---
   CriarPedidoFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "pedidos-criar-${Environment}"
-      Description: "Cria um novo pedido e publica evento no EventBridge"
       Handler: handler.lambda_handler
       CodeUri: src/criar_pedido/
       Events:
         Api:
           Type: Api
-          Properties:
-            RestApiId: !Ref PedidosApi
-            Path: /pedidos
-            Method: POST
+          Properties: { RestApiId: !Ref PedidosApi, Path: /pedidos, Method: POST }
       Policies:
-        - DynamoDBWritePolicy:
-            TableName: !Ref PedidosTable
-        - EventBridgePutEventsPolicy:
-            EventBusName: !Ref PedidosEventBus
+        - DynamoDBWritePolicy: { TableName: !Ref PedidosTable }
+        - EventBridgePutEventsPolicy: { EventBusName: !Ref PedidosEventBus }
+    Metadata:
+      BuildMethod: python3.13
 
-  # --- GET /pedidos/{id} ---
   ConsultarPedidoFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "pedidos-consultar-${Environment}"
-      Description: "Consulta um pedido por ID"
       Handler: handler.lambda_handler
       CodeUri: src/consultar_pedido/
       Events:
         Api:
           Type: Api
-          Properties:
-            RestApiId: !Ref PedidosApi
-            Path: /pedidos/{pedido_id}
-            Method: GET
+          Properties: { RestApiId: !Ref PedidosApi, Path: "/pedidos/{pedido_id}", Method: GET }
       Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref PedidosTable
+        - DynamoDBReadPolicy: { TableName: !Ref PedidosTable }
+    Metadata:
+      BuildMethod: python3.13
 
-  # --- PATCH /pedidos/{id}/aprovar e /pedidos/{id}/rejeitar ---
   DecidirPedidoFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "pedidos-decidir-${Environment}"
-      Description: "Aprova ou rejeita manualmente um pedido em aguardando_aprovacao"
       Handler: handler.lambda_handler
       CodeUri: src/decidir_pedido/
       Events:
         Aprovar:
           Type: Api
-          Properties:
-            RestApiId: !Ref PedidosApi
-            Path: /pedidos/{pedido_id}/aprovar
-            Method: PATCH
+          Properties: { RestApiId: !Ref PedidosApi, Path: "/pedidos/{pedido_id}/aprovar", Method: PATCH }
         Rejeitar:
           Type: Api
-          Properties:
-            RestApiId: !Ref PedidosApi
-            Path: /pedidos/{pedido_id}/rejeitar
-            Method: PATCH
+          Properties: { RestApiId: !Ref PedidosApi, Path: "/pedidos/{pedido_id}/rejeitar", Method: PATCH }
       Policies:
-        - DynamoDBReadPolicy:
-            TableName: !Ref PedidosTable
-        - DynamoDBWritePolicy:
-            TableName: !Ref PedidosTable
+        - DynamoDBReadPolicy: { TableName: !Ref PedidosTable }
+        - DynamoDBWritePolicy: { TableName: !Ref PedidosTable }
+    Metadata:
+      BuildMethod: python3.13
 
-  # --- Processamento assíncrono via EventBridge ---
   ProcessarPedidoFunction:
     Type: AWS::Serverless::Function
     Properties:
       FunctionName: !Sub "pedidos-processar-${Environment}"
-      Description: "Processa pedido de forma assíncrona como consumidor do EventBridge"
       Handler: handler.lambda_handler
       CodeUri: src/processar_pedido/
+      # Rota 4: EventBridge -> Lambda direto, sem fila no meio.
+      # O EventBridge invoca o Lambda de forma assincrona: o evento entra na
+      # fila interna do Lambda, que tenta de novo em caso de erro da funcao.
+      # Por isso esta rota precisa de DUAS redes de seguranca:
+      #   1. DeadLetterConfig na regra: falha de ENTREGA (o Lambda nem recebeu)
+      #   2. OnFailure no EventInvokeConfig: falha de PROCESSAMENTO (a funcao
+      #      recebeu, errou nas tentativas e o evento seria descartado)
       Events:
         PedidoCriado:
           Type: EventBridgeRule
           Properties:
             EventBusName: !Ref PedidosEventBus
-            Pattern:
-              source: [observability-demo.pedidos]
-              detail-type: [PedidoCriado]
+            Pattern: { source: [observability-demo.pedidos], detail-type: [PedidoCriado] }
+            DeadLetterConfig:
+              Arn: !GetAtt RuleDLQ.Arn
+      EventInvokeConfig:
+        MaximumRetryAttempts: 2
+        DestinationConfig:
+          OnFailure:
+            Type: SQS
+            Destination: !GetAtt ProcessarFalhasQueue.Arn
       Policies:
-        - DynamoDBWritePolicy:
-            TableName: !Ref PedidosTable
+        - DynamoDBWritePolicy: { TableName: !Ref PedidosTable }
+        - SQSSendMessagePolicy: { QueueName: !GetAtt ProcessarFalhasQueue.QueueName }
+    Metadata:
+      BuildMethod: python3.13
+
+  # Destino das invocacoes assincronas que falharam em todas as tentativas.
+  ProcessarFalhasQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "pedidos-processar-falhas-${Environment}"
+      MessageRetentionPeriod: 1209600   # 14 dias
 
   # =========================================================================
-  # INFRAESTRUTURA DE DADOS
+  # FAN-OUT — o assunto deste artigo
+  #
+  # Um único evento PedidoCriado é roteado por 3 regras diferentes do
+  # EventBridge para 3 filas SQS independentes. Cada fila alimenta um
+  # domínio de negócio que não sabe da existência dos outros dois.
+  #
+  # Por que EventBridge aqui, e não só publicar em 3 filas SQS direto do
+  # criar_pedido: o produtor (CriarPedidoFunction) não precisa conhecer os
+  # três consumidores. Se amanhã surgir um quarto domínio (ex: um serviço
+  # de fraude), ele só assina o evento — o código de criar_pedido não muda.
+  # Publicar direto em 3 filas exigiria alterar o produtor toda vez que um
+  # domínio novo precisar do evento.
   # =========================================================================
 
+  # --- Fila 1: Estoque ---
+  # VisibilityTimeout em 6x o timeout da função consumidora (30s x 6 = 180s),
+  # como a AWS recomenda para filas que alimentam Lambda.
+  # Para reproduzir a duplicidade de propósito, troque para 10 (ver README).
+  EstoqueQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "pedidos-estoque-${Environment}"
+      VisibilityTimeout: 180
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt EstoqueDLQ.Arn
+        maxReceiveCount: 3
+
+  EstoqueDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "pedidos-estoque-dlq-${Environment}"
+      MessageRetentionPeriod: 1209600   # 14 dias
+
+  EstoqueQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref EstoqueQueue]
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sqs:SendMessage
+            Resource: !GetAtt EstoqueQueue.Arn
+            Condition:
+              ArnEquals: { "aws:SourceArn": !GetAtt EstoqueRule.Arn }
+
+  EstoqueRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "pedido-criado-estoque-${Environment}"
+      EventBusName: !Ref PedidosEventBus
+      EventPattern: { source: [observability-demo.pedidos], detail-type: [PedidoCriado] }
+      Targets:
+        - Arn: !GetAtt EstoqueQueue.Arn
+          Id: EstoqueTarget
+          # Sem DLQ no alvo, se a entrega na fila falhar até o fim da política
+          # de retry (ex: policy errada), o evento é descartado sem alarme.
+          # Este projeto usa a RuleDLQ (abaixo) como DLQ compartilhada dos alvos.
+          DeadLetterConfig:
+            Arn: !GetAtt RuleDLQ.Arn
+
+  EstoqueConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "pedidos-estoque-consumer-${Environment}"
+      Handler: handler.lambda_handler
+      CodeUri: src/estoque_consumer/
+      Timeout: 30
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt EstoqueQueue.Arn
+            # Uma mensagem por invocação: cada baixa leva de 3 a 15s no sistema
+            # legado simulado. Com lote de 5, o pior caso (75s) passaria do
+            # timeout de 30s da função.
+            BatchSize: 1
+            MaximumConcurrency: 5
+            FunctionResponseTypes: [ReportBatchItemFailures]
+      Policies:
+        - DynamoDBWritePolicy: { TableName: !Ref PedidosTable }
+    Metadata:
+      BuildMethod: python3.13
+
+  # --- Fila 2: Notificação ---
+  NotificacaoQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "pedidos-notificacao-${Environment}"
+      VisibilityTimeout: 90   # 6x o timeout de 15s da função consumidora
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt NotificacaoDLQ.Arn
+        maxReceiveCount: 3
+
+  NotificacaoDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "pedidos-notificacao-dlq-${Environment}"
+      MessageRetentionPeriod: 1209600
+
+  NotificacaoQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref NotificacaoQueue]
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sqs:SendMessage
+            Resource: !GetAtt NotificacaoQueue.Arn
+            Condition:
+              ArnEquals: { "aws:SourceArn": !GetAtt NotificacaoRule.Arn }
+
+  NotificacaoRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "pedido-criado-notificacao-${Environment}"
+      EventBusName: !Ref PedidosEventBus
+      EventPattern: { source: [observability-demo.pedidos], detail-type: [PedidoCriado] }
+      Targets:
+        - Arn: !GetAtt NotificacaoQueue.Arn
+          Id: NotificacaoTarget
+          DeadLetterConfig:
+            Arn: !GetAtt RuleDLQ.Arn
+
+  NotificacaoConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "pedidos-notificacao-consumer-${Environment}"
+      Handler: handler.lambda_handler
+      CodeUri: src/notificacao_consumer/
+      Timeout: 15
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt NotificacaoQueue.Arn
+            BatchSize: 10
+            MaximumConcurrency: 10
+            # Esta flag é o que faz o retorno do BatchProcessor (Powertools)
+            # ser respeitado pelo SQS. Sem ela, mesmo com o código certo no
+            # handler, o comportamento continua sendo tudo-ou-nada.
+            FunctionResponseTypes: [ReportBatchItemFailures]
+    Metadata:
+      BuildMethod: python3.13
+
+  # --- Fila 3: Financeiro ---
+  FinanceiroQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "pedidos-financeiro-${Environment}"
+      VisibilityTimeout: 90   # 6x o timeout de 15s da função consumidora
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt FinanceiroDLQ.Arn
+        maxReceiveCount: 3
+
+  FinanceiroDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "pedidos-financeiro-dlq-${Environment}"
+      MessageRetentionPeriod: 1209600
+
+  FinanceiroQueuePolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref FinanceiroQueue]
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sqs:SendMessage
+            Resource: !GetAtt FinanceiroQueue.Arn
+            Condition:
+              ArnEquals: { "aws:SourceArn": !GetAtt FinanceiroRule.Arn }
+
+  FinanceiroRule:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: !Sub "pedido-criado-financeiro-${Environment}"
+      EventBusName: !Ref PedidosEventBus
+      EventPattern: { source: [observability-demo.pedidos], detail-type: [PedidoCriado] }
+      Targets:
+        - Arn: !GetAtt FinanceiroQueue.Arn
+          Id: FinanceiroTarget
+          DeadLetterConfig:
+            Arn: !GetAtt RuleDLQ.Arn
+
+  FinanceiroConsumerFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      FunctionName: !Sub "pedidos-financeiro-consumer-${Environment}"
+      Handler: handler.lambda_handler
+      CodeUri: src/financeiro_consumer/
+      Timeout: 15
+      Events:
+        SQSEvent:
+          Type: SQS
+          Properties:
+            Queue: !GetAtt FinanceiroQueue.Arn
+            BatchSize: 10
+            MaximumConcurrency: 10
+            FunctionResponseTypes: [ReportBatchItemFailures]
+    Metadata:
+      BuildMethod: python3.13
+
+  # DLQ compartilhada pelos alvos das regras do EventBridge. Nao e a mesma
+  # coisa que a DLQ de cada fila SQS: esta captura falha de ENTREGA
+  # (regra -> alvo); as DLQs das filas capturam falha de PROCESSAMENTO.
+  RuleDLQ:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: !Sub "pedidos-rule-dlq-${Environment}"
+      MessageRetentionPeriod: 1209600
+
+  RuleDLQPolicy:
+    Type: AWS::SQS::QueuePolicy
+    Properties:
+      Queues: [!Ref RuleDLQ]
+      PolicyDocument:
+        Statement:
+          - Effect: Allow
+            Principal: { Service: events.amazonaws.com }
+            Action: sqs:SendMessage
+            Resource: !GetAtt RuleDLQ.Arn
+
+  # =========================================================================
+  # DADOS
+  # =========================================================================
   PedidosTable:
     Type: AWS::DynamoDB::Table
     Properties:
       TableName: !Sub "pedidos-${Environment}"
       BillingMode: PAY_PER_REQUEST
       AttributeDefinitions:
-        - AttributeName: pedido_id
-          AttributeType: S
+        - { AttributeName: pedido_id, AttributeType: S }
       KeySchema:
-        - AttributeName: pedido_id
-          KeyType: HASH
+        - { AttributeName: pedido_id, KeyType: HASH }
       PointInTimeRecoverySpecification:
         PointInTimeRecoveryEnabled: !If [IsProd, true, false]
 
@@ -227,223 +418,114 @@ Resources:
       Name: !Sub "pedidos-bus-${Environment}"
 
   # =========================================================================
-  # LOG GROUPS - retenção explícita em todos
+  # LOG GROUPS
   # =========================================================================
-
-  ApiLogGroup:
-    Type: AWS::Logs::LogGroup
-    Properties:
-      LogGroupName: !Sub "/aws/apigateway/pedidos-api-${Environment}"
-      RetentionInDays: !Ref LogRetentionDays
-
   CriarPedidoLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Delete
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/pedidos-criar-${Environment}"
-      RetentionInDays: !Ref LogRetentionDays
-
+    Properties: { LogGroupName: !Sub "/aws/lambda/pedidos-criar-${Environment}", RetentionInDays: !Ref LogRetentionDays }
   ConsultarPedidoLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Delete
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/pedidos-consultar-${Environment}"
-      RetentionInDays: !Ref LogRetentionDays
-
+    Properties: { LogGroupName: !Sub "/aws/lambda/pedidos-consultar-${Environment}", RetentionInDays: !Ref LogRetentionDays }
   DecidirPedidoLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Delete
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/pedidos-decidir-${Environment}"
-      RetentionInDays: !Ref LogRetentionDays
-
+    Properties: { LogGroupName: !Sub "/aws/lambda/pedidos-decidir-${Environment}", RetentionInDays: !Ref LogRetentionDays }
   ProcessarPedidoLogGroup:
     Type: AWS::Logs::LogGroup
     DeletionPolicy: Delete
-    Properties:
-      LogGroupName: !Sub "/aws/lambda/pedidos-processar-${Environment}"
-      RetentionInDays: !Ref LogRetentionDays
+    Properties: { LogGroupName: !Sub "/aws/lambda/pedidos-processar-${Environment}", RetentionInDays: !Ref LogRetentionDays }
+  EstoqueConsumerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties: { LogGroupName: !Sub "/aws/lambda/pedidos-estoque-consumer-${Environment}", RetentionInDays: !Ref LogRetentionDays }
+  NotificacaoConsumerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties: { LogGroupName: !Sub "/aws/lambda/pedidos-notificacao-consumer-${Environment}", RetentionInDays: !Ref LogRetentionDays }
+  FinanceiroConsumerLogGroup:
+    Type: AWS::Logs::LogGroup
+    DeletionPolicy: Delete
+    Properties: { LogGroupName: !Sub "/aws/lambda/pedidos-financeiro-consumer-${Environment}", RetentionInDays: !Ref LogRetentionDays }
 
   # =========================================================================
-  # ALARMES - o mínimo que você precisa em produção
+  # ALARMES — o mínimo por fila: idade da mensagem mais antiga + DLQ com item
   # =========================================================================
 
-  # Alarme de erro por função
-  CriarPedidoErrorAlarm:
+  # Se a mensagem mais antiga não processada está envelhecendo, o consumer
+  # não está dando conta do volume — sinal de subir concorrência ou investigar.
+  EstoqueAtrasoAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub "pedidos-criar-errors-${Environment}"
-      AlarmDescription: "Taxa de erro > 1% nos últimos 5 minutos"
-      Namespace: AWS/Lambda
-      MetricName: Errors
-      Dimensions:
-        - Name: FunctionName
-          Value: !Ref CriarPedidoFunction
-      Statistic: Sum
+      AlarmName: !Sub "pedidos-estoque-atraso-${Environment}"
+      Namespace: AWS/SQS
+      MetricName: ApproximateAgeOfOldestMessage
+      Dimensions: [{ Name: QueueName, Value: !GetAtt EstoqueQueue.QueueName }]
+      Statistic: Maximum
       Period: 300
       EvaluationPeriods: 1
-      Threshold: 1
-      ComparisonOperator: GreaterThanOrEqualToThreshold
-      TreatMissingData: notBreaching
-
-  # Alarme de latência - p99, não média
-  CriarPedidoDurationAlarm:
-    Type: AWS::CloudWatch::Alarm
-    Properties:
-      AlarmName: !Sub "pedidos-criar-duration-p99-${Environment}"
-      AlarmDescription: "p99 de duração > 80% do timeout (24s de 30s)"
-      Namespace: AWS/Lambda
-      MetricName: Duration
-      Dimensions:
-        - Name: FunctionName
-          Value: !Ref CriarPedidoFunction
-      ExtendedStatistic: p99
-      Period: 300
-      EvaluationPeriods: 2
-      Threshold: 24000           # 80% de 30s = 24s em ms
+      Threshold: 300   # 5 minutos
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
-  # Alarme de throttle
-  ThrottleAlarm:
+  # Qualquer mensagem na DLQ merece atenção — não é "vamos ver depois".
+  FinanceiroDLQAlarm:
     Type: AWS::CloudWatch::Alarm
     Properties:
-      AlarmName: !Sub "pedidos-throttles-${Environment}"
-      AlarmDescription: "Qualquer throttle em produção merece atenção"
-      Namespace: AWS/Lambda
-      MetricName: Throttles
-      Dimensions:
-        - Name: FunctionName
-          Value: !Ref CriarPedidoFunction
-      Statistic: Sum
-      Period: 60
+      AlarmName: !Sub "pedidos-financeiro-dlq-com-item-${Environment}"
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: !GetAtt FinanceiroDLQ.QueueName }]
+      Statistic: Maximum
+      Period: 300
       EvaluationPeriods: 1
       Threshold: 0
       ComparisonOperator: GreaterThanThreshold
       TreatMissingData: notBreaching
 
-  # =========================================================================
-  # DASHBOARD - visão consolidada da stack
-  # =========================================================================
-  PedidosDashboard:
-    Type: AWS::CloudWatch::Dashboard
+  RuleDLQAlarm:
+    Type: AWS::CloudWatch::Alarm
     Properties:
-      DashboardName: !Sub "pedidos-observabilidade-${Environment}"
-      DashboardBody: !Sub |
-        {
-          "widgets": [
-            {
-              "type": "metric",
-              "properties": {
-                "title": "Taxa de Erro por Função",
-                "region": "${AWS::Region}",
-                "metrics": [
-                  ["AWS/Lambda", "Errors", "FunctionName", "pedidos-criar-${Environment}", {"stat": "Sum", "period": 300, "color": "#d62728", "label": "Criar"}],
-                  ["AWS/Lambda", "Errors", "FunctionName", "pedidos-consultar-${Environment}", {"stat": "Sum", "period": 300, "color": "#ff7f0e", "label": "Consultar"}],
-                  ["AWS/Lambda", "Errors", "FunctionName", "pedidos-processar-${Environment}", {"stat": "Sum", "period": 300, "color": "#9467bd", "label": "Processar"}]
-                ],
-                "view": "timeSeries",
-                "period": 300
-              }
-            },
-            {
-              "type": "metric",
-              "properties": {
-                "title": "Latência p99 por Função (ms)",
-                "region": "${AWS::Region}",
-                "metrics": [
-                  ["AWS/Lambda", "Duration", "FunctionName", "pedidos-criar-${Environment}", {"stat": "p99", "period": 300, "label": "Criar p99"}],
-                  ["AWS/Lambda", "Duration", "FunctionName", "pedidos-consultar-${Environment}", {"stat": "p99", "period": 300, "label": "Consultar p99"}],
-                  ["AWS/Lambda", "Duration", "FunctionName", "pedidos-processar-${Environment}", {"stat": "p99", "period": 300, "label": "Processar p99"}]
-                ],
-                "view": "timeSeries",
-                "period": 300
-              }
-            },
-            {
-              "type": "metric",
-              "properties": {
-                "title": "Invocações Totais",
-                "region": "${AWS::Region}",
-                "metrics": [
-                  ["AWS/Lambda", "Invocations", "FunctionName", "pedidos-criar-${Environment}", {"stat": "Sum", "period": 300}],
-                  ["AWS/Lambda", "Invocations", "FunctionName", "pedidos-consultar-${Environment}", {"stat": "Sum", "period": 300}],
-                  ["AWS/Lambda", "Invocations", "FunctionName", "pedidos-processar-${Environment}", {"stat": "Sum", "period": 300}]
-                ],
-                "view": "timeSeries",
-                "period": 300
-              }
-            },
-            {
-              "type": "metric",
-              "properties": {
-                "title": "Throttles",
-                "region": "${AWS::Region}",
-                "metrics": [
-                  ["AWS/Lambda", "Throttles", "FunctionName", "pedidos-criar-${Environment}", {"stat": "Sum", "period": 60}],
-                  ["AWS/Lambda", "Throttles", "FunctionName", "pedidos-consultar-${Environment}", {"stat": "Sum", "period": 60}]
-                ],
-                "view": "timeSeries",
-                "period": 60
-              }
-            },
-            {
-              "type": "metric",
-              "properties": {
-                "title": "Cold Starts (métrica customizada via EMF)",
-                "region": "${AWS::Region}",
-                "metrics": [
-                  ["observability-demo/Pedidos", "ColdStart", "service", "observability-demo", "function_name", "pedidos-criar-${Environment}", {"stat": "Sum", "period": 300, "label": "Criar"}],
-                  ["observability-demo/Pedidos", "ColdStart", "service", "observability-demo", "function_name", "pedidos-consultar-${Environment}", {"stat": "Sum", "period": 300, "label": "Consultar"}],
-                  ["observability-demo/Pedidos", "ColdStart", "service", "observability-demo", "function_name", "pedidos-processar-${Environment}", {"stat": "Sum", "period": 300, "label": "Processar"}],
-                  ["observability-demo/Pedidos", "ColdStart", "service", "observability-demo", "function_name", "pedidos-decidir-${Environment}", {"stat": "Sum", "period": 300, "label": "Decidir"}]
-                ],
-                "view": "timeSeries",
-                "period": 300
-              }
-            },
-            {
-              "type": "metric",
-              "properties": {
-                "title": "Pedidos Processados por Status (EMF)",
-                "region": "${AWS::Region}",
-                "metrics": [
-                  ["observability-demo/Pedidos", "PedidoProcessado", "Status", "aprovado", "service", "observability-demo", {"stat": "Sum", "period": 300, "color": "#2ca02c"}],
-                  ["observability-demo/Pedidos", "PedidoProcessado", "Status", "aguardando_aprovacao", "service", "observability-demo", {"stat": "Sum", "period": 300, "color": "#ff7f0e"}],
-                  ["observability-demo/Pedidos", "PedidoProcessado", "Status", "rejeitado", "service", "observability-demo", {"stat": "Sum", "period": 300, "color": "#d62728"}]
-                ],
-                "view": "timeSeries",
-                "period": 300
-              }
-            },
-            {
-              "type": "metric",
-              "properties": {
-                "title": "Decisões Manuais - Aprovar/Rejeitar (EMF)",
-                "region": "${AWS::Region}",
-                "metrics": [
-                  ["observability-demo/Pedidos", "PedidoDecididoManualmente", "Decisao", "aprovado", "service", "observability-demo", {"stat": "Sum", "period": 300, "color": "#2ca02c"}],
-                  ["observability-demo/Pedidos", "PedidoDecididoManualmente", "Decisao", "rejeitado", "service", "observability-demo", {"stat": "Sum", "period": 300, "color": "#d62728"}]
-                ],
-                "view": "timeSeries",
-                "period": 300
-              }
-            }
-          ]
-        }
+      AlarmName: !Sub "pedidos-rule-dlq-com-item-${Environment}"
+      AlarmDescription: "Evento não entregue a nenhum target — verificar policy/permissão"
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: !GetAtt RuleDLQ.QueueName }]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
 
-# ---------------------------------------------------------------------------
-# Outputs
-# ---------------------------------------------------------------------------
+  ProcessarFalhasAlarm:
+    Type: AWS::CloudWatch::Alarm
+    Properties:
+      AlarmName: !Sub "pedidos-processar-falhas-com-item-${Environment}"
+      AlarmDescription: "Evento descartado pelo processar_pedido depois das tentativas"
+      Namespace: AWS/SQS
+      MetricName: ApproximateNumberOfMessagesVisible
+      Dimensions: [{ Name: QueueName, Value: !GetAtt ProcessarFalhasQueue.QueueName }]
+      Statistic: Maximum
+      Period: 300
+      EvaluationPeriods: 1
+      Threshold: 0
+      ComparisonOperator: GreaterThanThreshold
+      TreatMissingData: notBreaching
+
 Outputs:
   ApiUrl:
-    Description: "URL da API"
     Value: !Sub "https://${PedidosApi}.execute-api.${AWS::Region}.amazonaws.com/${Environment}"
-
-  DashboardUrl:
-    Description: "URL do Dashboard CloudWatch"
-    Value: !Sub "https://${AWS::Region}.console.aws.amazon.com/cloudwatch/home#dashboards:name=pedidos-observabilidade-${Environment}"
-
-  PedidosTableName:
-    Description: "Nome da tabela DynamoDB"
-    Value: !Ref PedidosTable
+  EventBusName:
+    Value: !Ref PedidosEventBus
+  EstoqueQueueUrl:
+    Value: !Ref EstoqueQueue
+  NotificacaoQueueUrl:
+    Value: !Ref NotificacaoQueue
+  FinanceiroQueueUrl:
+    Value: !Ref FinanceiroQueue
+  FinanceiroDLQUrl:
+    Value: !Ref FinanceiroDLQ
+  ProcessarFalhasQueueUrl:
+    Value: !Ref ProcessarFalhasQueue

@@ -1,0 +1,1 @@
+# vazio — deps vêm do layer Powertools (inclui aws_lambda_powertools.utilities.batch)

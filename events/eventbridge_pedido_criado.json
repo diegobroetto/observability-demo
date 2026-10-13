@@ -1,0 +1,10 @@
+{
+  "source": "observability-demo.pedidos",
+  "detail-type": "PedidoCriado",
+  "detail": {
+    "pedido_id": "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee",
+    "cliente_id": "cli-001",
+    "valor": 179.80,
+    "produtos": [{"id": "prod-a", "nome": "Sérum Facial", "qty": 2}]
+  }
+}

@@ -1,8 +1,6 @@
 {
   "httpMethod": "POST",
   "path": "/pedidos",
-  "headers": {
-    "Content-Type": "application/json"
-  },
+  "headers": {"Content-Type": "application/json"},
   "body": "{\"cliente_id\": \"cli-001\", \"produtos\": [{\"id\": \"prod-a\", \"nome\": \"Sérum Facial\", \"qty\": 2}], \"valor\": 179.80}"
 }
