@@ -1,6 +1,7 @@
 """criar_pedido/handler.py — POST /pedidos"""
 import json, os, uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 import boto3
 from observability import logger, tracer, metrics, registrar_erro
 from aws_lambda_powertools.metrics import MetricUnit
@@ -29,7 +30,10 @@ def lambda_handler(event, context):
             "atualizado_em": agora,
         }
 
-        table.put_item(Item=pedido, ConditionExpression="attribute_not_exists(pedido_id)")
+        # DynamoDB não aceita float nativo: o valor vai como Decimal só no item
+        # gravado; o evento publicado continua com o número do JSON.
+        item = {**pedido, "valor": Decimal(str(pedido["valor"]))}
+        table.put_item(Item=item, ConditionExpression="attribute_not_exists(pedido_id)")
 
         eventbridge.put_events(Entries=[{
             "Source":       "observability-demo.pedidos",
