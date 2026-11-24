@@ -1,0 +1,25 @@
+name: pr
+
+on:
+  pull_request:
+    branches: [main]
+
+# Esse job não toca na AWS: não pede id-token e não tem credencial nenhuma.
+permissions:
+  contents: read
+
+jobs:
+  validar:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.13"
+      - uses: aws-actions/setup-sam@v2
+        with:
+          use-installer: true
+      - name: Validar e rodar o lint do template
+        run: sam validate --lint --region us-east-1
+      - name: Build
+        run: sam build --use-container
