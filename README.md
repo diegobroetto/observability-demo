@@ -191,3 +191,48 @@ sam delete --stack-name observability-demo-dev
 ## Artigo completo
 
 [Dev.to - Série Serverless na Prática](https://dev.to/diegobroetto)
+
+---
+
+## CI/CD com GitHub Actions via OIDC (sem access keys)
+
+O deploy roda no GitHub Actions e assume uma role da AWS com um token OIDC de vida curta.
+Nenhuma access key é guardada no repositório.
+
+| Arquivo | O que faz |
+|---|---|
+| `infra/github-oidc.yaml` | Cria o provedor OIDC e a role de deploy. Rodado uma vez, à mão |
+| `.github/workflows/pr.yml` | Em pull request: `sam validate --lint` e `sam build`. Sem credencial AWS |
+| `.github/workflows/deploy.yml` | Em push na `main`: assume a role via OIDC e roda `sam deploy` no ambiente `dev` |
+
+### Configuração (uma vez)
+
+```bash
+# 1. Role e provedor OIDC (com credenciais de administrador)
+aws cloudformation deploy \
+  --stack-name github-oidc-observability-demo \
+  --template-file infra/github-oidc.yaml \
+  --capabilities CAPABILITY_NAMED_IAM \
+  --region us-east-1
+
+# Conta que já tem o provedor do GitHub? Acrescente:
+#   --parameter-overrides CreateOidcProvider=false
+
+# 2. ARN da role
+aws cloudformation describe-stacks --stack-name github-oidc-observability-demo \
+  --query "Stacks[0].Outputs[?OutputKey=='DeployRoleArn'].OutputValue" --output text
+
+# 3. Guarde o ARN como variável (não é segredo) do repositório
+gh variable set AWS_DEPLOY_ROLE_ARN --body "arn:aws:iam::<conta>:role/github-actions-observability-demo-deploy"
+```
+
+O parâmetro `AllowedSub` define qual `sub` pode assumir a role. O default serve para este repositório
+(criado depois de 15/07/2026, formato imutável com IDs). Em repositório antigo use
+`repo:OWNER/REPO:ref:refs/heads/main`.
+
+### Testando
+
+1. Abra um PR: só o `pr` roda, sem credencial AWS.
+2. Faça merge na `main`: o `deploy` aparece no Actions, e o passo "Quem sou eu?" mostra a role assumida.
+3. Quer ver a trava funcionando? Rode o deploy de outra branch (workflow_dispatch) e veja o `AccessDenied` na
+   etapa de credenciais.
