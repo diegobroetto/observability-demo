@@ -1,0 +1,10 @@
+{
+  "source": "observability-demo.pedidos",
+  "detail-type": "PedidoCriado",
+  "detail": {
+    "pedidoId": "ped-002",
+    "produtoId": "prod-camiseta",
+    "quantidade": 500,
+    "valor": 79900.0
+  }
+}

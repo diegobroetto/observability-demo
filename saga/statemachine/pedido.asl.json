@@ -1,0 +1,223 @@
+{
+  "Comment": "Saga de pedido: reserva estoque, cobra, confirma. Se algo falha, desfaz na ordem inversa.",
+  "QueryLanguage": "JSONata",
+  "StartAt": "NormalizarPedido",
+  "States": {
+    "NormalizarPedido": {
+      "Type": "Pass",
+      "Assign": {
+        "pedidoId": "{% $exists($states.input.detail.pedidoId) ? $states.input.detail.pedidoId : $states.input.detail.pedido_id %}",
+        "produtoId": "{% $exists($states.input.detail.produtoId) ? $states.input.detail.produtoId : 'prod-camiseta' %}",
+        "quantidade": "{% $exists($states.input.detail.quantidade) ? $states.input.detail.quantidade : 1 %}",
+        "valor": "{% $states.input.detail.valor %}",
+        "simular": "{% $exists($states.input.detail.simular) ? $states.input.detail.simular : 'nenhum' %}"
+      },
+      "Next": "ReservarEstoque"
+    },
+    "ReservarEstoque": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "${ReservarEstoqueArn}",
+        "Payload": {
+          "pedidoId": "{% $pedidoId %}",
+          "produtoId": "{% $produtoId %}",
+          "quantidade": "{% $quantidade %}"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "ServicoIndisponivel"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Assign": {
+            "etapaFalha": "ReservarEstoque",
+            "falha": "{% $states.errorOutput %}"
+          },
+          "Next": "PedidoRecusado"
+        }
+      ],
+      "Next": "CobrarPagamento"
+    },
+    "CobrarPagamento": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "${CobrarPagamentoArn}",
+        "Payload": {
+          "pedidoId": "{% $pedidoId %}",
+          "valor": "{% $valor %}",
+          "simular": "{% $simular %}"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "ServicoIndisponivel"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Assign": {
+        "cobrancaId": "{% $states.result.Payload.cobrancaId %}"
+      },
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Assign": {
+            "etapaFalha": "CobrarPagamento",
+            "falha": "{% $states.errorOutput %}"
+          },
+          "Next": "LiberarEstoque"
+        }
+      ],
+      "Next": "ConfirmarPedido"
+    },
+    "ConfirmarPedido": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "${ConfirmarPedidoArn}",
+        "Payload": {
+          "pedidoId": "{% $pedidoId %}",
+          "simular": "{% $simular %}"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "Lambda.ServiceException",
+            "Lambda.AWSLambdaException",
+            "Lambda.SdkClientException",
+            "ServicoIndisponivel"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 3,
+          "BackoffRate": 2.0,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Assign": {
+            "etapaFalha": "ConfirmarPedido",
+            "falha": "{% $states.errorOutput %}"
+          },
+          "Next": "EstornarPagamento"
+        }
+      ],
+      "Next": "PedidoConfirmado"
+    },
+    "EstornarPagamento": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "${EstornarPagamentoArn}",
+        "Payload": {
+          "cobrancaId": "{% $cobrancaId %}",
+          "simular": "{% $simular %}"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2.0,
+          "MaxDelaySeconds": 60,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Assign": {
+            "etapaCompensacao": "EstornarPagamento",
+            "falhaCompensacao": "{% $states.errorOutput %}"
+          },
+          "Next": "CompensacaoFalhou"
+        }
+      ],
+      "Next": "LiberarEstoque"
+    },
+    "LiberarEstoque": {
+      "Type": "Task",
+      "Resource": "arn:aws:states:::lambda:invoke",
+      "Arguments": {
+        "FunctionName": "${LiberarEstoqueArn}",
+        "Payload": {
+          "pedidoId": "{% $pedidoId %}",
+          "produtoId": "{% $produtoId %}",
+          "quantidade": "{% $quantidade %}"
+        }
+      },
+      "Retry": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "IntervalSeconds": 2,
+          "MaxAttempts": 6,
+          "BackoffRate": 2.0,
+          "MaxDelaySeconds": 60,
+          "JitterStrategy": "FULL"
+        }
+      ],
+      "Catch": [
+        {
+          "ErrorEquals": [
+            "States.ALL"
+          ],
+          "Assign": {
+            "etapaCompensacao": "LiberarEstoque",
+            "falhaCompensacao": "{% $states.errorOutput %}"
+          },
+          "Next": "CompensacaoFalhou"
+        }
+      ],
+      "Next": "PedidoRecusado"
+    },
+    "PedidoConfirmado": {
+      "Type": "Succeed"
+    },
+    "PedidoRecusado": {
+      "Type": "Fail",
+      "Error": "PedidoRecusado",
+      "Cause": "{% 'Pedido ' & $pedidoId & ' recusado em ' & $etapaFalha & ': ' & ($exists($falha.Cause) ? $falha.Cause : 'sem detalhe') %}"
+    },
+    "CompensacaoFalhou": {
+      "Type": "Fail",
+      "Error": "CompensacaoFalhou",
+      "Cause": "{% 'Pedido ' & $pedidoId & ': a compensação ' & $etapaCompensacao & ' falhou e precisa de intervenção manual' %}"
+    }
+  }
+}
