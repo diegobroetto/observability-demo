@@ -1,0 +1,143 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Transform: AWS::Serverless-2016-10-31
+Description: Saga de pedido com Step Functions, compensação e SAM (Python 3.13, arm64)
+
+Parameters:
+  EventBusName:
+    Type: String
+    Default: pedidos-bus-dev
+    Description: Bus do observability-demo onde o criar_pedido publica PedidoCriado (pedidos-bus-<Environment>)
+  EventSource:
+    Type: String
+    Default: observability-demo.pedidos
+    Description: Campo source do evento PedidoCriado
+
+Globals:
+  Function:
+    Runtime: python3.13
+    Architectures:
+      - arm64
+    CodeUri: src/
+    Timeout: 10
+    MemorySize: 256
+    Environment:
+      Variables:
+        ESTOQUE_TABLE: !Ref EstoqueTable
+        RESERVAS_TABLE: !Ref ReservasTable
+
+Resources:
+  EstoqueTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: produtoId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: produtoId
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  ReservasTable:
+    Type: AWS::DynamoDB::Table
+    Properties:
+      BillingMode: PAY_PER_REQUEST
+      AttributeDefinitions:
+        - AttributeName: pedidoId
+          AttributeType: S
+      KeySchema:
+        - AttributeName: pedidoId
+          KeyType: HASH
+      SSESpecification:
+        SSEEnabled: true
+
+  ReservarEstoqueFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: reservar_estoque.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref EstoqueTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ReservasTable
+
+  LiberarEstoqueFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: liberar_estoque.handler
+      Policies:
+        - DynamoDBCrudPolicy:
+            TableName: !Ref EstoqueTable
+        - DynamoDBCrudPolicy:
+            TableName: !Ref ReservasTable
+
+  CobrarPagamentoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: cobrar_pagamento.handler
+
+  EstornarPagamentoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: estornar_pagamento.handler
+
+  ConfirmarPedidoFunction:
+    Type: AWS::Serverless::Function
+    Properties:
+      Handler: confirmar_pedido.handler
+
+  SagaLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: !Sub /aws/vendedlogs/states/${AWS::StackName}-saga
+      RetentionInDays: 14
+
+  PedidoSaga:
+    Type: AWS::Serverless::StateMachine
+    Properties:
+      Type: STANDARD
+      DefinitionUri: statemachine/pedido.asl.json
+      DefinitionSubstitutions:
+        ReservarEstoqueArn: !GetAtt ReservarEstoqueFunction.Arn
+        LiberarEstoqueArn: !GetAtt LiberarEstoqueFunction.Arn
+        CobrarPagamentoArn: !GetAtt CobrarPagamentoFunction.Arn
+        EstornarPagamentoArn: !GetAtt EstornarPagamentoFunction.Arn
+        ConfirmarPedidoArn: !GetAtt ConfirmarPedidoFunction.Arn
+      Policies:
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ReservarEstoqueFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref LiberarEstoqueFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref CobrarPagamentoFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref EstornarPagamentoFunction
+        - LambdaInvokePolicy:
+            FunctionName: !Ref ConfirmarPedidoFunction
+      Logging:
+        Level: ERROR
+        IncludeExecutionData: false
+        Destinations:
+          - CloudWatchLogsLogGroup:
+              LogGroupArn: !GetAtt SagaLogGroup.Arn
+      Tracing:
+        Enabled: true
+      Events:
+        PedidoCriado:
+          Type: EventBridgeRule
+          Properties:
+            EventBusName: !Ref EventBusName
+            Pattern:
+              source:
+                - !Ref EventSource
+              detail-type:
+                - PedidoCriado
+
+Outputs:
+  PedidoSagaArn:
+    Value: !Ref PedidoSaga
+  EstoqueTableName:
+    Value: !Ref EstoqueTable
+  ReservasTableName:
+    Value: !Ref ReservasTable
